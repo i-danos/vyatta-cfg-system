@@ -1,5 +1,6 @@
 [Unit]
 Description=Vyatta CPU History Daemon
+ConditionPathExists=/opt/vyatta/etc/features/vyatta-op-show-hardware-cpu-v1/cpu-history
 
 [Service]
 Type=dbus

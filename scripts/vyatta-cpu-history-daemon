@@ -20,6 +20,7 @@ from threading import Event, Thread
 
 #Standard includes (for logging)
 import syslog
+import traceback
 
 #Constant defined for the thread cycle delay interval
 #Make -1 from required interval; sar command adds 1 sec on every initial read
@@ -92,23 +93,38 @@ def sarLog_func():
    global numDataEntries
    try:
      while sarLog_thread_event.is_set():
-        #Running the sar command through the subprocess library
-        args = ['sar', '1', '1']
-        sarOut = str(subprocess.check_output(args))
-        index = sarOut.find('Average:')
-        finalOut = sarOut[index+9:]
-        ts = time.time()
-        timeStamp = (datetime.datetime.utcfromtimestamp(ts)
-        .strftime('%Y-%m-%d %H:%M:%S'))
-        numDataEntries+=1
-        stripped = finalOut.strip("\\n'")
-        dataList = stripped.split()
-        #Index begins at 1 since the first 'slice' of the data string is "ALL"
-        sliceIndex = 1
-        for key in utilizationTypes:
-          totalDataDict[key].append(float(dataList[sliceIndex]))
-          sliceIndex+=1
-        time.sleep(THREAD_CYCLE_DELAY)
+        try:
+            #Running the sar command through the subprocess library
+            #Force locale to C to ensure consistent output format
+            args = ['sar', '1', '1']
+            sarOut = subprocess.check_output(args, env={'LC_ALL': 'C', 'PATH': '/usr/bin:/bin:/usr/sbin:/sbin'}).decode('utf-8')
+            index = sarOut.find('Average:')
+            if index == -1:
+                syslog.syslog(syslog.LOG_ERR, 'sar output format error: "Average:" not found. Output: {}'.format(sarOut))
+                time.sleep(THREAD_CYCLE_DELAY)
+                continue
+
+            finalOut = sarOut[index+9:]
+            ts = time.time()
+            timeStamp = (datetime.datetime.utcfromtimestamp(ts)
+            .strftime('%Y-%m-%d %H:%M:%S'))
+            numDataEntries+=1
+            stripped = finalOut.strip()
+            dataList = stripped.split()
+            #Index begins at 1 since the first 'slice' of the data string is "ALL"
+            sliceIndex = 1
+            for key in utilizationTypes:
+              if sliceIndex < len(dataList):
+                  totalDataDict[key].append(float(dataList[sliceIndex]))
+                  sliceIndex+=1
+              else:
+                  syslog.syslog(syslog.LOG_ERR, 'sar output parsing error: not enough fields. Output: {}'.format(stripped))
+                  break
+            time.sleep(THREAD_CYCLE_DELAY)
+        except Exception as e:
+            syslog.syslog(syslog.LOG_ERR, 'Error in sarLog_func: {}'.format(str(e)))
+            syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
+            time.sleep(THREAD_CYCLE_DELAY)
    except:
      pass
 
@@ -147,3 +163,9 @@ if __name__ == "__main__":
         sarLog_thread_event.clear()
         sarLog_thread.join()
         exit(0)
+      except Exception as e:
+        syslog.syslog(syslog.LOG_ERR, 'Fatal error in main: {}'.format(str(e)))
+        syslog.syslog(syslog.LOG_ERR, traceback.format_exc())
+        sarLog_thread_event.clear()
+        sarLog_thread.join()
+        exit(1)
